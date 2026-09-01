@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
+import { useAuth } from '@/components/providers';
 import { supabase } from '@/lib/supabase';
 import type { EmailRow, EmailStatus } from '@/lib/types';
 import {
@@ -22,35 +23,41 @@ import {
   Send,
   CalendarClock,
   Inbox,
+  Users,
+  Timer,
+  Gauge,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { format, parseISO } from 'date-fns';
 
 interface EmailTableProps {
   status: EmailStatus;
-  onEdit?: (email: EmailRow) => void;
 }
 
-export function EmailTable({ status, onEdit }: EmailTableProps) {
+export function EmailTable({ status }: EmailTableProps) {
+  const { session } = useAuth();
   const [emails, setEmails] = useState<EmailRow[]>([]);
   const [loading, setLoading] = useState(true);
 
   const fetchEmails = useCallback(async () => {
     setLoading(true);
-    const { data, error } = await supabase
-      .from('emails')
-      .select('*')
-      .eq('status', status)
-      .order(status === 'scheduled' ? 'scheduled_for' : 'sent_at', { ascending: status === 'scheduled' });
-
-    if (error) {
+    try {
+      const endpoint = status === 'scheduled' ? '/api/emails/scheduled' : '/api/emails/sent';
+      const response = await fetch(endpoint, {
+        headers: {
+          Authorization: `Bearer ${session?.access_token || ''}`,
+        },
+      });
+      if (!response.ok) throw new Error('Failed to fetch');
+      const data = await response.json();
+      setEmails(data.emails || []);
+    } catch {
       toast.error('Failed to load emails');
       setEmails([]);
-    } else {
-      setEmails((data as EmailRow[]) || []);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
-  }, [status]);
+  }, [status, session]);
 
   useEffect(() => {
     fetchEmails();
@@ -79,7 +86,8 @@ export function EmailTable({ status, onEdit }: EmailTableProps) {
     }
   }
 
-  function formatDate(iso: string) {
+  function formatDate(iso: string | null) {
+    if (!iso) return '--';
     try {
       return format(parseISO(iso), 'MMM d, yyyy • h:mm a');
     } catch {
@@ -124,12 +132,12 @@ export function EmailTable({ status, onEdit }: EmailTableProps) {
           )}
         </div>
         <h3 className="text-lg font-semibold text-foreground">
-          {isScheduled ? 'No scheduled emails' : 'No sent emails yet'}
+          {isScheduled ? 'No scheduled campaigns' : 'No sent campaigns yet'}
         </h3>
         <p className="mt-1 max-w-sm text-sm text-muted-foreground">
           {isScheduled
-            ? 'Compose a new email and schedule it to see it here. Your scheduled emails will appear in this list.'
-            : 'Once you send emails, they will show up here with delivery details and timestamps.'}
+            ? 'Compose a new email campaign and schedule it to see it here. Your scheduled campaigns will appear in this list.'
+            : 'Once your campaigns are sent, they will show up here with delivery details and timestamps.'}
         </p>
       </div>
     );
@@ -141,13 +149,16 @@ export function EmailTable({ status, onEdit }: EmailTableProps) {
       <Table>
         <TableHeader>
           <TableRow className="border-border hover:bg-transparent">
-            <TableHead className="w-[30%]">Recipient</TableHead>
-            <TableHead>Subject</TableHead>
-            <TableHead className="w-[180px]">
-              {isScheduled ? 'Scheduled For' : 'Sent At'}
+            <TableHead className="w-[25%]">Subject</TableHead>
+            <TableHead className="w-[15%]">First Recipient</TableHead>
+            <TableHead className="w-[80px]">Leads</TableHead>
+            <TableHead className="w-[80px]">Delay</TableHead>
+            <TableHead className="w-[80px]">Hrly Limit</TableHead>
+            <TableHead className="w-[170px]">
+              {isScheduled ? 'Start Time' : 'Sent At'}
             </TableHead>
-            <TableHead className="w-[100px]">Status</TableHead>
-            <TableHead className="w-[100px] text-right">Actions</TableHead>
+            <TableHead className="w-[90px]">Status</TableHead>
+            <TableHead className="w-[80px] text-right">Actions</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -162,21 +173,34 @@ export function EmailTable({ status, onEdit }: EmailTableProps) {
                     <Mail className="h-4 w-4" />
                   </div>
                   <div className="min-w-0">
-                    <p className="truncate text-sm font-medium text-foreground">
-                      {email.recipient_name || email.recipient}
+                    <p className="truncate text-sm font-medium text-foreground">{email.subject}</p>
+                    <p className="truncate text-xs text-muted-foreground">
+                      {email.body.slice(0, 60)}
+                      {email.body.length > 60 ? '...' : ''}
                     </p>
-                    {email.recipient_name && (
-                      <p className="truncate text-xs text-muted-foreground">{email.recipient}</p>
-                    )}
                   </div>
                 </div>
               </TableCell>
               <TableCell>
-                <p className="truncate text-sm text-foreground">{email.subject}</p>
-                <p className="truncate text-xs text-muted-foreground">
-                  {email.body.slice(0, 80)}
-                  {email.body.length > 80 ? '...' : ''}
-                </p>
+                <p className="truncate text-sm text-foreground">{email.recipient}</p>
+              </TableCell>
+              <TableCell>
+                <Badge variant="outline" className="gap-1 border-primary/30 bg-primary/10 text-primary">
+                  <Users className="h-3 w-3" />
+                  {email.lead_count}
+                </Badge>
+              </TableCell>
+              <TableCell>
+                <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                  <Timer className="h-3 w-3" />
+                  {email.delay_seconds}s
+                </div>
+              </TableCell>
+              <TableCell>
+                <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                  <Gauge className="h-3 w-3" />
+                  {email.hourly_limit}
+                </div>
               </TableCell>
               <TableCell>
                 <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
@@ -185,7 +209,9 @@ export function EmailTable({ status, onEdit }: EmailTableProps) {
                   ) : (
                     <CheckCircle2 className="h-3.5 w-3.5 text-success" />
                   )}
-                  <span className="text-xs">{formatDate(isScheduled ? email.scheduled_for : email.sent_at || email.updated_at)}</span>
+                  <span className="text-xs">
+                    {formatDate(isScheduled ? email.start_time || email.scheduled_for : email.sent_at)}
+                  </span>
                 </div>
               </TableCell>
               <TableCell>
@@ -213,26 +239,15 @@ export function EmailTable({ status, onEdit }: EmailTableProps) {
               <TableCell className="text-right">
                 <div className="flex items-center justify-end gap-1 opacity-60 transition-opacity group-hover:opacity-100">
                   {isScheduled && (
-                    <>
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        className="h-8 w-8 hover:bg-primary/15 hover:text-primary"
-                        onClick={() => onEdit?.(email)}
-                        title="Edit"
-                      >
-                        <CalendarClock className="h-4 w-4" />
-                      </Button>
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        className="h-8 w-8 hover:bg-primary/15 hover:text-primary"
-                        onClick={() => handleSendNow(email)}
-                        title="Send now"
-                      >
-                        <Send className="h-4 w-4" />
-                      </Button>
-                    </>
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="h-8 w-8 hover:bg-primary/15 hover:text-primary"
+                      onClick={() => handleSendNow(email)}
+                      title="Send now"
+                    >
+                      <Send className="h-4 w-4" />
+                    </Button>
                   )}
                   <Button
                     size="icon"

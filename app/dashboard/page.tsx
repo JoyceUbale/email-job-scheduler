@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/providers';
 import { Navbar } from '@/components/navbar';
@@ -9,22 +9,44 @@ import { ComposeDialog } from '@/components/compose-dialog';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { PenSquare, CalendarClock, CheckCircle2, Clock, Loader2 } from 'lucide-react';
-import type { EmailRow } from '@/lib/types';
 
 export default function DashboardPage() {
   const router = useRouter();
-  const { user, loading } = useAuth();
+  const { user, loading, session } = useAuth();
   const [composeOpen, setComposeOpen] = useState(false);
-  const [editEmail, setEditEmail] = useState<EmailRow | null>(null);
   const [activeTab, setActiveTab] = useState<'scheduled' | 'sent'>('scheduled');
   const [refreshKey, setRefreshKey] = useState(0);
-  const tableRef = useRef<{ fetchEmails: () => void } | null>(null);
+  const [stats, setStats] = useState({ scheduled: 0, sent: 0, total: 0 });
 
   useEffect(() => {
     if (!loading && !user) {
       router.replace('/');
     }
   }, [user, loading, router]);
+
+  useEffect(() => {
+    if (!session) return;
+    async function loadStats() {
+      try {
+        const [scheduledRes, sentRes] = await Promise.all([
+          fetch('/api/emails/scheduled', {
+            headers: { Authorization: `Bearer ${session?.access_token || ''}` },
+          }),
+          fetch('/api/emails/sent', {
+            headers: { Authorization: `Bearer ${session?.access_token || ''}` },
+          }),
+        ]);
+        const scheduledData = await scheduledRes.json();
+        const sentData = await sentRes.json();
+        const sCount = scheduledData.emails?.length || 0;
+        const tCount = sentData.emails?.length || 0;
+        setStats({ scheduled: sCount, sent: tCount, total: sCount + tCount });
+      } catch {
+        // keep defaults
+      }
+    }
+    loadStats();
+  }, [session, refreshKey]);
 
   if (loading || !user) {
     return (
@@ -34,13 +56,7 @@ export default function DashboardPage() {
     );
   }
 
-  function handleEdit(email: EmailRow) {
-    setEditEmail(email);
-    setComposeOpen(true);
-  }
-
   function handleComposeNew() {
-    setEditEmail(null);
     setComposeOpen(true);
   }
 
@@ -58,7 +74,7 @@ export default function DashboardPage() {
           <div>
             <h1 className="text-2xl font-bold tracking-tight text-foreground">Email Dashboard</h1>
             <p className="mt-1 text-sm text-muted-foreground">
-              Schedule, track, and manage your outreach emails.
+              Schedule, track, and manage your outreach email campaigns.
             </p>
           </div>
           <Button onClick={handleComposeNew} size="lg" className="gap-2 shadow-lg shadow-primary/20">
@@ -76,7 +92,7 @@ export default function DashboardPage() {
               </div>
               <div>
                 <p className="text-sm text-muted-foreground">Scheduled</p>
-                <p className="text-xl font-bold text-foreground">--</p>
+                <p className="text-xl font-bold text-foreground">{stats.scheduled}</p>
               </div>
             </div>
           </div>
@@ -87,7 +103,7 @@ export default function DashboardPage() {
               </div>
               <div>
                 <p className="text-sm text-muted-foreground">Sent</p>
-                <p className="text-xl font-bold text-foreground">--</p>
+                <p className="text-xl font-bold text-foreground">{stats.sent}</p>
               </div>
             </div>
           </div>
@@ -98,7 +114,7 @@ export default function DashboardPage() {
               </div>
               <div>
                 <p className="text-sm text-muted-foreground">Total</p>
-                <p className="text-xl font-bold text-foreground">--</p>
+                <p className="text-xl font-bold text-foreground">{stats.total}</p>
               </div>
             </div>
           </div>
@@ -118,15 +134,11 @@ export default function DashboardPage() {
           </TabsList>
 
           <TabsContent value="scheduled">
-            <EmailTableWrapper
-              key={`scheduled-${refreshKey}`}
-              status="scheduled"
-              onEdit={handleEdit}
-            />
+            <EmailTable key={`scheduled-${refreshKey}`} status="scheduled" />
           </TabsContent>
 
           <TabsContent value="sent">
-            <EmailTableWrapper key={`sent-${refreshKey}`} status="sent" />
+            <EmailTable key={`sent-${refreshKey}`} status="sent" />
           </TabsContent>
         </Tabs>
       </main>
@@ -135,20 +147,8 @@ export default function DashboardPage() {
       <ComposeDialog
         open={composeOpen}
         onOpenChange={setComposeOpen}
-        editEmail={editEmail}
         onSaved={handleSaved}
       />
     </div>
   );
-}
-
-// Wrapper to ensure fresh component instance per refresh
-function EmailTableWrapper({
-  status,
-  onEdit,
-}: {
-  status: 'scheduled' | 'sent';
-  onEdit?: (email: EmailRow) => void;
-}) {
-  return <EmailTable status={status} onEdit={onEdit} />;
 }

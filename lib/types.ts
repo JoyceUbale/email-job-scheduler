@@ -11,6 +11,10 @@ export interface EmailRow {
   scheduled_for: string;
   sent_at: string | null;
   slack_notified: boolean;
+  delay_seconds: number;
+  hourly_limit: number;
+  lead_count: number;
+  start_time: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -20,4 +24,20 @@ export interface AppUser {
   email: string;
   name: string;
   avatarUrl: string | null;
+}
+
+export interface ScheduleEmailPayload {
+  subject: string;
+  body: string;
+  startTime: string;
+  delaySeconds: number;
+  hourlyLimit: number;
+  leads: string[];
+}
+
+export interface ScheduleEmailResponse {
+  success: boolean;
+  campaignId: string;
+  leadCount: number;
+  message: string;
 }
