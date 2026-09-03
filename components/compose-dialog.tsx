@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '@/components/providers';
 import { supabase } from '@/lib/supabase';
-import type { ScheduleEmailPayload, ScheduleEmailResponse } from '@/lib/types';
+import type { ScheduleEmailResponse } from '@/lib/types';
 import {
   Dialog,
   DialogContent,
@@ -34,7 +34,6 @@ import {
   Upload,
   FileText,
   X,
-  Mail,
   Gauge,
   Timer,
   Users,
@@ -86,7 +85,6 @@ export function ComposeDialog({ open, onOpenChange, onSaved }: ComposeDialogProp
 
   function parseFileContent(text: string) {
     setParsing(true);
-    // Use a small timeout so the UI can show the parsing state
     setTimeout(() => {
       const matches = text.match(EMAIL_REGEX) || [];
       const unique = Array.from(new Set(matches.map((e) => e.toLowerCase())));
@@ -154,6 +152,31 @@ export function ComposeDialog({ open, onOpenChange, onSaved }: ComposeDialogProp
     return Object.keys(errs).length === 0;
   }
 
+  async function getOrCreateSenderConfig(userId: string, userEmail: string): Promise<string | number> {
+    // 1. Fetch existing sender config
+    const { data: existing } = await supabase
+      .from('sender_configs')
+      .select('id')
+      .eq('user_id', userId)
+      .limit(1)
+      .maybeSingle();
+
+    if (existing?.id) return existing.id;
+
+    // 2. Create sender config if absent
+    const { data: inserted, error } = await supabase
+      .from('sender_configs')
+      .insert([{ user_id: userId, email: userEmail, is_active: true }])
+      .select('id')
+      .single();
+
+    if (error || !inserted?.id) {
+      throw new Error(`Failed to configure sender email: ${error?.message || 'Unknown database error'}`);
+    }
+
+    return inserted.id;
+  }
+
   async function handleSubmit() {
     if (!validate()) {
       toast.error('Please fix the errors before submitting');
@@ -164,25 +187,46 @@ export function ComposeDialog({ open, onOpenChange, onSaved }: ComposeDialogProp
 
     setSaving(true);
     try {
-      const payload: ScheduleEmailPayload = {
+      const { data: { session: currentSession } } = await supabase.auth.getSession();
+      const activeSession = currentSession || session;
+      const userId = activeSession?.user?.id;
+      const userEmail = activeSession?.user?.email || 'user@example.com';
+
+      if (!userId) {
+        throw new Error('User session not found. Please log in again.');
+      }
+
+      // Fetch or create required senderConfigId
+      const senderConfigId = await getOrCreateSenderConfig(userId, userEmail);
+
+      const payload = {
+        userId,
         subject: subject.trim(),
         body: body.trim(),
         startTime,
         delaySeconds: parseInt(delaySeconds, 10),
         hourlyLimit: parseInt(hourlyLimit, 10),
         leads,
+        senderConfigId,
       };
 
-      const response = await fetch('/api/schedule-email', {
+      const backendUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
+      const response = await fetch(`${backendUrl}/api/schedule-email`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${session?.access_token || ''}`,
+          'Authorization': `Bearer ${activeSession?.access_token || ''}`,
         },
         body: JSON.stringify(payload),
       });
 
-      const data: ScheduleEmailResponse = await response.json();
+      const responseText = await response.text();
+      let data: ScheduleEmailResponse;
+      try {
+        data = JSON.parse(responseText);
+      } catch {
+        throw new Error(`Server status ${response.status}: ${responseText}`);
+      }
 
       if (!response.ok || !data.success) {
         throw new Error(data.message || 'Failed to schedule campaign');
@@ -194,6 +238,7 @@ export function ComposeDialog({ open, onOpenChange, onSaved }: ComposeDialogProp
       onSaved?.();
       onOpenChange(false);
     } catch (err) {
+      console.error('Submit error:', err);
       toast.error('Failed to schedule campaign', {
         description: err instanceof Error ? err.message : 'Unknown error',
       });
@@ -218,7 +263,6 @@ export function ComposeDialog({ open, onOpenChange, onSaved }: ComposeDialogProp
         </DialogHeader>
 
         <div className="grid gap-4">
-          {/* Subject */}
           <div className="space-y-1.5">
             <Label htmlFor="subject">Email Subject *</Label>
             <Input
@@ -232,7 +276,6 @@ export function ComposeDialog({ open, onOpenChange, onSaved }: ComposeDialogProp
             {errors.subject && <p className="text-xs text-destructive">{errors.subject}</p>}
           </div>
 
-          {/* Body */}
           <div className="space-y-1.5">
             <Label htmlFor="body">Email Body *</Label>
             <Textarea
@@ -245,7 +288,6 @@ export function ComposeDialog({ open, onOpenChange, onSaved }: ComposeDialogProp
             {errors.body && <p className="text-xs text-destructive">{errors.body}</p>}
           </div>
 
-          {/* Start Time */}
           <div className="space-y-1.5">
             <Label>Start Time *</Label>
             <div className="flex flex-wrap items-center gap-2">
@@ -310,7 +352,6 @@ export function ComposeDialog({ open, onOpenChange, onSaved }: ComposeDialogProp
             {errors.startTime && <p className="text-xs text-destructive">{errors.startTime}</p>}
           </div>
 
-          {/* Delay & Hourly Limit */}
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div className="space-y-1.5">
               <Label htmlFor="delay" className="flex items-center gap-1.5">
@@ -346,7 +387,6 @@ export function ComposeDialog({ open, onOpenChange, onSaved }: ComposeDialogProp
             </div>
           </div>
 
-          {/* File Upload */}
           <div className="space-y-1.5">
             <Label className="flex items-center gap-1.5">
               <Upload className="h-3.5 w-3.5 text-muted-foreground" />
@@ -407,7 +447,6 @@ export function ComposeDialog({ open, onOpenChange, onSaved }: ComposeDialogProp
             {errors.leads && <p className="text-xs text-destructive">{errors.leads}</p>}
           </div>
 
-          {/* Lead count badge */}
           {leads.length > 0 && !parsing && (
             <div className="flex items-center gap-2">
               <Badge className="gap-1.5 border-success/30 bg-success/10 text-success">

@@ -8,7 +8,7 @@ export const redis = new Redis({
   host: redisHost,
   port: redisPort,
   password: redisPassword,
-  maxRetriesPerRequest: 3,
+  maxRetriesPerRequest: null,
   enableReadyCheck: true,
   lazyConnect: false,
 });
